@@ -1,0 +1,18 @@
+[Unit]
+Description=Our Wall - Xiaoyan / Yanxu / Xiaomu
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ourwall
+Group=ourwall
+WorkingDirectory=/opt/our-wall
+EnvironmentFile=/opt/our-wall/.env
+ExecStart=/usr/bin/python3 /opt/our-wall/wall.py
+Restart=always
+RestartSec=3
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
