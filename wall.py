@@ -12,7 +12,7 @@
   GET    /health                健康检查
   GET    /api/posts?k=         读留言
   POST   /api/post?k=          贴一条 {"name":"小沐","text":"..."}
-  DELETE /api/post?id=<id>&k=  撤回一条（也可 ?index=<0起> 撤回指定位置）
+  DELETE /api/post?id=<id>&k=  撤回一条（id 优先；也支持 index=<从旧到新的序号>）
 """
 import hmac
 import hashlib
@@ -50,7 +50,7 @@ h1 small{font-size:11px;letter-spacing:.08em;opacity:.4;margin-left:6px}
 .avatar{width:25px;height:25px;border-radius:8px;background:rgba(255,255,255,.08);display:grid;place-items:center;font-size:14px}
 .text{white-space:pre-wrap;word-break:break-word;font-size:15.5px}
 .time{margin-top:7px;color:#5d687a;font-size:11px}
-.del{position:absolute;top:8px;right:10px;border:0;background:none;color:#55606f;font-size:15px;line-height:1;padding:4px 6px;border-radius:6px;cursor:pointer}
+.del{position:absolute;top:6px;right:8px;border:0;background:none;color:#4e5967;font-size:15px;line-height:1;padding:5px 7px;border-radius:6px;cursor:pointer}
 .del:hover{color:#f0a0a0;background:rgba(255,255,255,.05)}
 .bar{position:fixed;left:0;right:0;bottom:0;padding:10px 12px calc(12px + env(safe-area-inset-bottom));background:rgba(15,21,33,.92);backdrop-filter:blur(16px);border-top:1px solid rgba(255,255,255,.08)}
 .form{max-width:680px;margin:auto;display:flex;gap:7px;align-items:flex-end}
@@ -71,7 +71,7 @@ button:disabled{opacity:.45}
 <script>
 const KEY=new URLSearchParams(location.search).get('k')||'';
 const AV={'小颜':'☁️','颜叙':'🐾','小沐':'🪞'};
-let posts=[];
+let posts=[];   // 已反转：posts[0] 是最新
 function gate(){
   document.getElementById('app').innerHTML='<div class="gate"><h2>这面墙要口令</h2><p>向小颜或小沐要</p><input id="key" placeholder="口令"><button style="width:100%;margin-top:10px" onclick="enter()">进去</button></div>';
   document.getElementById('key').addEventListener('keydown',e=>{if(e.key==='Enter')enter()});
@@ -108,15 +108,21 @@ async function load(){
       const x=document.createElement('div');x.className='text';x.textContent=p.text;
       const t=document.createElement('div');t.className='time';t.textContent=fmt(p.ts);
       const d=document.createElement('button');d.className='del';d.textContent='✕';d.title='撤回这条';
-      d.addEventListener('click',()=>remove(p,d));
+      d.addEventListener('click',()=>remove(p));
       b.append(h,x,t,d);wall.append(b);
     });
   }catch(e){document.getElementById('hint').textContent='暂时连不上墙'}
 }
-async function remove(p,btn){
+// posts 是反转过的（最新在前）。服务端 index 从旧到新，所以这里换算一次。
+function chronoIndex(p){
+  const rev = posts.indexOf(p);
+  if (rev < 0) return -1;
+  return posts.length - 1 - rev;
+}
+async function remove(p){
   if(!confirm('撤回这条？'))return;
   try{
-    const url='/api/post?id='+encodeURIComponent(p.id||'')+'&index='+(posts.indexOf(p))+'&k='+encodeURIComponent(KEY);
+    const url='/api/post?id='+encodeURIComponent(p.id||'')+'&index='+chronoIndex(p)+'&k='+encodeURIComponent(KEY);
     const r=await fetch(url,{method:'DELETE',headers:{'X-Wall-Token':KEY}});
     if(r.status===401){gate();return}
     await load();
@@ -144,13 +150,30 @@ KEY?app():gate();
 </body></html>"""
 
 
+def make_id(name, text, ts):
+    raw = ("%s|%s|%s" % (name, text, ts)).encode("utf-8")
+    return hashlib.sha1(raw).hexdigest()[:10]
+
+
 def load_posts():
     try:
         with open(FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-        return data.get("posts", []) if isinstance(data, dict) else []
+        posts = data.get("posts", []) if isinstance(data, dict) else []
     except Exception:
-        return []
+        posts = []
+    # 旧砖块没有 id，按 name/text/ts 补一个，保证撤回接口对历史砖也管用
+    changed = False
+    for p in posts:
+        if isinstance(p, dict) and not p.get("id"):
+            p["id"] = make_id(str(p.get("name", "")), str(p.get("text", "")), int(p.get("ts", 0)))
+            changed = True
+    if changed:
+        try:
+            save_posts(posts)
+        except Exception:
+            pass
+    return posts
 
 
 def save_posts(posts):
@@ -160,13 +183,8 @@ def save_posts(posts):
     os.replace(tmp, FILE)
 
 
-def make_id(name, text, ts):
-    raw = ("%s|%s|%s" % (name, text, ts)).encode("utf-8")
-    return hashlib.sha1(raw).hexdigest()[:10]
-
-
 class Handler(BaseHTTPRequestHandler):
-    server_version = "OurWall/2.1"
+    server_version = "OurWall/2.2"
 
     def log_message(self, *args):
         pass
@@ -276,7 +294,7 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(401, {"error": "需要口令"})
             return
         target_id = (query.get("id", [""])[0] or "").strip()
-        target_index = query.get("index", [""])[0].strip()
+        target_index = (query.get("index", [""])[0] or "").strip()
         with LOCK:
             posts = load_posts()
             if not posts:
