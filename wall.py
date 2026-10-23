@@ -4,8 +4,9 @@
 
 零依赖，只用 Python 标准库。
 数据：/opt/our-wall/data/wall.json
-口令：公网访问需要 ?k=<token> 或 X-Wall-Token 头；
-      内网地址（127./10./172.16-31./192.168.）视为可信来源，免口令。
+访问：
+  - 外网访问需要口令：?k=<token> 或 X-Wall-Token 头
+  - 内网/本机来源免口令（127./10./172.16-31./192.168./本机公网 IP）
 """
 import hmac
 import json
@@ -17,6 +18,7 @@ from urllib.parse import urlparse, parse_qs
 
 PORT = int(os.environ.get("WALL_PORT", "5005"))
 TOKEN = os.environ.get("WALL_TOKEN", "")
+TRUST_IP = os.environ.get("WALL_TRUST_IP", "8.138.23.195")
 DATA = os.environ.get("WALL_DATA", "/opt/our-wall/data")
 FILE = os.path.join(DATA, "wall.json")
 os.makedirs(DATA, exist_ok=True)
@@ -128,7 +130,7 @@ def save_posts(posts):
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "OurWall/1.0"
+    server_version = "OurWall/2.0"
 
     def log_message(self, *args):
         pass
@@ -150,12 +152,15 @@ class Handler(BaseHTTPRequestHandler):
             ip = self.client_address[0]
         except Exception:
             return False
-        if ip == "::1" or ip.startswith("127."):
+        if ip in ("::1", "127.0.0.1") or ip.startswith("127."):
+            return True
+        if TRUST_IP and ip == TRUST_IP:
             return True
         parts = ip.split(".")
         if len(parts) == 4:
             try:
-                a = int(parts[0]); b = int(parts[1])
+                a = int(parts[0])
+                b = int(parts[1])
             except Exception:
                 return False
             if a == 10:
@@ -179,7 +184,7 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(200, HTML, "text/html; charset=utf-8")
             return
         if url.path == "/health":
-            self.reply(200, {"ok": True, "time": int(time.time() * 1000)})
+            self.reply(200, {"ok": True, "time": int(time.time() * 1000), "total": len(load_posts())})
             return
         if url.path == "/api/posts":
             if not self.authorized(query):
